@@ -128,17 +128,83 @@ class EventInterestView(APIView):
             return Response({'error': 'Event not found'}, status=status.HTTP_404_NOT_FOUND)
         
 class ForumTopicListView(APIView):
-    """API endpoint to retrieve forum topics for preview"""
+    """API endpoint to retrieve forum topics with filtering and pagination"""
     permission_classes = [AllowAny]
     
     def get(self, request):
-        # Get the most recent and active topics
-        topics = ForumTopic.objects.filter(
-            is_closed=False
-        ).order_by('-is_pinned', '-updated_at')[:3]  # Limit to 3 topics for the preview
-        
-        serializer = ForumTopicListSerializer(topics, many=True)
-        return Response(serializer.data)
+        try:
+            # Check if this is a preview request (no query parameters)
+            is_preview = not any(request.query_params.keys())
+            
+            if is_preview:
+                # Get the most recent and active topics for preview
+                topics = ForumTopic.objects.filter(
+                    is_closed=False
+                ).order_by('-is_pinned', '-updated_at')[:3]  # Limit to 3 topics for the preview
+                
+                serializer = ForumTopicListSerializer(topics, many=True)
+                return Response(serializer.data)
+            else:
+                # Full listing with filtering and pagination
+                topics = ForumTopic.objects.all()
+                
+                # Filter by category
+                category_id = request.query_params.get('category_id')
+                if category_id:
+                    topics = topics.filter(category_id=category_id)
+                
+                # Filter by search query
+                search = request.query_params.get('search')
+                if search:
+                    topics = topics.filter(
+                        Q(title__icontains=search) | Q(content__icontains=search)
+                    )
+                
+                # Filter by status
+                is_pinned = request.query_params.get('is_pinned')
+                if is_pinned is not None:
+                    topics = topics.filter(is_pinned=is_pinned.lower() == 'true')
+                
+                is_closed = request.query_params.get('is_closed')
+                if is_closed is not None:
+                    topics = topics.filter(is_closed=is_closed.lower() == 'true')
+                
+                # Sort options
+                sort_by = request.query_params.get('sort_by', '-created_at')
+                if sort_by == 'title':
+                    topics = topics.order_by('title')
+                elif sort_by == '-title':
+                    topics = topics.order_by('-title')
+                elif sort_by == 'views':
+                    topics = topics.order_by('views_count')
+                elif sort_by == '-views':
+                    topics = topics.order_by('-views_count')
+                elif sort_by == 'replies':
+                    topics = topics.annotate(replies_count=Count('replies')).order_by('replies_count')
+                elif sort_by == '-replies':
+                    topics = topics.annotate(replies_count=Count('replies')).order_by('-replies_count')
+                else:
+                    topics = topics.order_by('-is_pinned', '-created_at')
+                
+                # Pagination
+                page = int(request.query_params.get('page', 1))
+                page_size = int(request.query_params.get('page_size', 20))
+                
+                paginator = Paginator(topics, page_size)
+                topics_page = paginator.get_page(page)
+                
+                serializer = ForumTopicListSerializer(topics_page, many=True)
+                
+                return Response({
+                    'topics': serializer.data,
+                    'total_count': paginator.count,
+                    'total_pages': paginator.num_pages,
+                    'current_page': page,
+                    'has_next': topics_page.has_next(),
+                    'has_previous': topics_page.has_previous()
+                })
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class ForumCategoryListView(APIView):
     """API endpoint to retrieve all forum categories"""
@@ -2505,3 +2571,357 @@ class AnnouncementPinView(APIView):
                 {'error': 'Failed to update announcement pin status'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+class ForumTopicCreateView(APIView):
+    """API endpoint to create a new forum topic"""
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        try:
+            data = request.data
+            category_id = data.get('category_id')
+            
+            if not category_id:
+                return Response({'error': 'Category is required'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            try:
+                category = ForumCategory.objects.get(id=category_id)
+            except ForumCategory.DoesNotExist:
+                return Response({'error': 'Category not found'}, status=status.HTTP_404_NOT_FOUND)
+            
+            topic = ForumTopic.objects.create(
+                title=data.get('title'),
+                content=data.get('content'),
+                category=category,
+                created_by=request.user
+            )
+            
+            return Response({
+                'id': topic.id,
+                'title': topic.title,
+                'content': topic.content,
+                'category': {
+                    'id': topic.category.id,
+                    'name': topic.category.name
+                },
+                'author': {
+                    'id': topic.created_by.id,
+                    'name': topic.created_by.get_full_name() or topic.created_by.username,
+                    'avatar': topic.created_by.profile_picture.url if topic.created_by.profile_picture else None
+                },
+                'created_at': topic.created_at,
+                'updated_at': topic.updated_at,
+                'is_pinned': topic.is_pinned,
+                'is_closed': topic.is_closed,
+                'views_count': topic.views_count
+            }, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class ForumTopicUpdateView(APIView):
+    """API endpoint to update a forum topic"""
+    permission_classes = [IsAuthenticated]
+    
+    def put(self, request, topic_id):
+        try:
+            topic = ForumTopic.objects.get(id=topic_id)
+            
+            # Check if user is admin or the topic creator
+            if request.user.role != 'ADMIN' and topic.created_by != request.user:
+                return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+            
+            data = request.data
+            
+            if 'title' in data:
+                topic.title = data['title']
+            if 'content' in data:
+                topic.content = data['content']
+            if 'category_id' in data:
+                try:
+                    category = ForumCategory.objects.get(id=data['category_id'])
+                    topic.category = category
+                except ForumCategory.DoesNotExist:
+                    return Response({'error': 'Category not found'}, status=status.HTTP_404_NOT_FOUND)
+            if 'is_pinned' in data and request.user.role == 'ADMIN':
+                topic.is_pinned = data['is_pinned']
+            if 'is_closed' in data and request.user.role == 'ADMIN':
+                topic.is_closed = data['is_closed']
+            
+            topic.save()
+            
+            return Response({
+                'id': topic.id,
+                'title': topic.title,
+                'content': topic.content,
+                'category': {
+                    'id': topic.category.id,
+                    'name': topic.category.name
+                },
+                'author': {
+                    'id': topic.created_by.id,
+                    'name': topic.created_by.get_full_name() or topic.created_by.username,
+                    'avatar': topic.created_by.profile_picture.url if topic.created_by.profile_picture else None
+                },
+                'created_at': topic.created_at,
+                'updated_at': topic.updated_at,
+                'is_pinned': topic.is_pinned,
+                'is_closed': topic.is_closed,
+                'views_count': topic.views_count
+            })
+        except ForumTopic.DoesNotExist:
+            return Response({'error': 'Topic not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class ForumTopicDeleteView(APIView):
+    """API endpoint to delete a forum topic"""
+    permission_classes = [IsAuthenticated]
+    
+    def delete(self, request, topic_id):
+        try:
+            topic = ForumTopic.objects.get(id=topic_id)
+            
+            # Check if user is admin or the topic creator
+            if request.user.role != 'ADMIN' and topic.created_by != request.user:
+                return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+            
+            topic.delete()
+            return Response({'message': 'Topic deleted successfully'})
+        except ForumTopic.DoesNotExist:
+            return Response({'error': 'Topic not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class ForumReplyCreateView(APIView):
+    """API endpoint to create a new forum reply"""
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request, topic_id):
+        try:
+            topic = ForumTopic.objects.get(id=topic_id)
+            
+            if topic.is_closed:
+                return Response({'error': 'Topic is closed for replies'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            data = request.data
+            reply = ForumReply.objects.create(
+                topic=topic,
+                content=data.get('content'),
+                created_by=request.user
+            )
+            
+            return Response({
+                'id': reply.id,
+                'content': reply.content,
+                'author': {
+                    'id': reply.created_by.id,
+                    'name': reply.created_by.get_full_name() or reply.created_by.username,
+                    'avatar': reply.created_by.profile_picture.url if reply.created_by.profile_picture else None
+                },
+                'created_at': reply.created_at,
+                'updated_at': reply.updated_at,
+                'is_solution': reply.is_solution
+            }, status=status.HTTP_201_CREATED)
+        except ForumTopic.DoesNotExist:
+            return Response({'error': 'Topic not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class ForumReplyUpdateView(APIView):
+    """API endpoint to update a forum reply"""
+    permission_classes = [IsAuthenticated]
+    
+    def put(self, request, topic_id, reply_id):
+        try:
+            reply = ForumReply.objects.get(id=reply_id, topic_id=topic_id)
+            
+            # Check if user is admin or the reply creator
+            if request.user.role != 'ADMIN' and reply.created_by != request.user:
+                return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+            
+            data = request.data
+            
+            if 'content' in data:
+                reply.content = data['content']
+            if 'is_solution' in data and request.user.role == 'ADMIN':
+                reply.is_solution = data['is_solution']
+            
+            reply.save()
+            
+            return Response({
+                'id': reply.id,
+                'content': reply.content,
+                'author': {
+                    'id': reply.created_by.id,
+                    'name': reply.created_by.get_full_name() or reply.created_by.username,
+                    'avatar': reply.created_by.profile_picture.url if reply.created_by.profile_picture else None
+                },
+                'created_at': reply.created_at,
+                'updated_at': reply.updated_at,
+                'is_solution': reply.is_solution
+            })
+        except ForumReply.DoesNotExist:
+            return Response({'error': 'Reply not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class ForumReplyDeleteView(APIView):
+    """API endpoint to delete a forum reply"""
+    permission_classes = [IsAuthenticated]
+    
+    def delete(self, request, topic_id, reply_id):
+        try:
+            reply = ForumReply.objects.get(id=reply_id, topic_id=topic_id)
+            
+            # Check if user is admin or the reply creator
+            if request.user.role != 'ADMIN' and reply.created_by != request.user:
+                return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+            
+            reply.delete()
+            return Response({'message': 'Reply deleted successfully'})
+        except ForumReply.DoesNotExist:
+            return Response({'error': 'Reply not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class ForumCategoryCreateView(APIView):
+    """API endpoint to create a new forum category"""
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        try:
+            if request.user.role != 'ADMIN':
+                return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+            
+            data = request.data
+            category = ForumCategory.objects.create(
+                name=data.get('name'),
+                description=data.get('description'),
+                icon=data.get('icon', ''),
+                order=data.get('order', 0)
+            )
+            
+            return Response({
+                'id': category.id,
+                'name': category.name,
+                'description': category.description,
+                'icon': category.icon,
+                'order': category.order,
+                'topics': 0,
+                'posts': 0
+            }, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class ForumCategoryUpdateView(APIView):
+    """API endpoint to update a forum category"""
+    permission_classes = [IsAuthenticated]
+    
+    def put(self, request, category_id):
+        try:
+            if request.user.role != 'ADMIN':
+                return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+            
+            category = ForumCategory.objects.get(id=category_id)
+            data = request.data
+            
+            if 'name' in data:
+                category.name = data['name']
+            if 'description' in data:
+                category.description = data['description']
+            if 'icon' in data:
+                category.icon = data['icon']
+            if 'order' in data:
+                category.order = data['order']
+            
+            category.save()
+            
+            return Response({
+                'id': category.id,
+                'name': category.name,
+                'description': category.description,
+                'icon': category.icon,
+                'order': category.order,
+                'topics': category.topics.count(),
+                'posts': sum(topic.replies.count() + 1 for topic in category.topics.all())
+            })
+        except ForumCategory.DoesNotExist:
+            return Response({'error': 'Category not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class ForumCategoryDeleteView(APIView):
+    """API endpoint to delete a forum category"""
+    permission_classes = [IsAuthenticated]
+    
+    def delete(self, request, category_id):
+        try:
+            if request.user.role != 'ADMIN':
+                return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+            
+            category = ForumCategory.objects.get(id=category_id)
+            
+            # Check if category has topics
+            if category.topics.exists():
+                return Response({'error': 'Cannot delete category with existing topics'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            category.delete()
+            return Response({'message': 'Category deleted successfully'})
+        except ForumCategory.DoesNotExist:
+            return Response({'error': 'Category not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class ForumStatsView(APIView):
+    """API endpoint to get forum statistics"""
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        try:
+            total_topics = ForumTopic.objects.count()
+            total_replies = ForumReply.objects.count()
+            total_categories = ForumCategory.objects.count()
+            
+            # Recent activity
+            recent_topics = ForumTopic.objects.order_by('-created_at')[:5]
+            recent_replies = ForumReply.objects.order_by('-created_at')[:5]
+            
+            # Most active categories
+            active_categories = ForumCategory.objects.annotate(
+                topic_count=Count('topics'),
+                reply_count=Count('topics__replies')
+            ).order_by('-topic_count')[:5]
+            
+            # Most viewed topics
+            popular_topics = ForumTopic.objects.order_by('-views_count')[:5]
+            
+            return Response({
+                'stats': {
+                    'total_topics': total_topics,
+                    'total_replies': total_replies,
+                    'total_categories': total_categories,
+                    'total_posts': total_topics + total_replies
+                },
+                'recent_activity': {
+                    'topics': ForumTopicListSerializer(recent_topics, many=True).data,
+                    'replies': [{
+                        'id': reply.id,
+                        'content': reply.content[:100] + '...' if len(reply.content) > 100 else reply.content,
+                        'topic_title': reply.topic.title,
+                        'author': {
+                            'name': reply.created_by.get_full_name() or reply.created_by.username,
+                            'avatar': reply.created_by.profile_picture.url if reply.created_by.profile_picture else None
+                        },
+                        'created_at': reply.created_at
+                    } for reply in recent_replies]
+                },
+                'active_categories': [{
+                    'id': cat.id,
+                    'name': cat.name,
+                    'topic_count': cat.topic_count,
+                    'reply_count': cat.reply_count
+                } for cat in active_categories],
+                'popular_topics': ForumTopicListSerializer(popular_topics, many=True).data
+            })
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

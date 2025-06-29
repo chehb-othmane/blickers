@@ -169,11 +169,134 @@ export interface ForumTopic {
     // Get topics for preview
     getTopicPreviews: async (): Promise<ForumTopic[]> => {
       try {
-        const response = await api.get('/api/forum/topics/preview/');
-        return response.data as ForumTopic[];
+        const response = await api.get('/api/forum/topics/');
+        // Check if response is an array (preview) or object (full listing)
+        if (Array.isArray(response.data)) {
+          return response.data as ForumTopic[];
+        } else {
+          const data = response.data as any;
+          return data.topics || [];
+        }
       } catch (error) {
         console.error('Error fetching forum topics:', error);
         return [];
+      }
+    },
+    
+    // Get all forum topics with filtering and pagination
+    getTopics: async (params?: {
+      category_id?: number;
+      search?: string;
+      is_pinned?: boolean;
+      is_closed?: boolean;
+      sort_by?: string;
+      page?: number;
+      page_size?: number;
+    }): Promise<{
+      topics: ForumTopic[];
+      total_count: number;
+      total_pages: number;
+      current_page: number;
+      has_next: boolean;
+      has_previous: boolean;
+    }> => {
+      try {
+        const response = await api.get('/api/forum/topics/', { params });
+        return response.data as {
+          topics: ForumTopic[];
+          total_count: number;
+          total_pages: number;
+          current_page: number;
+          has_next: boolean;
+          has_previous: boolean;
+        };
+      } catch (error) {
+        console.error('Error fetching forum topics:', error);
+        return {
+          topics: [],
+          total_count: 0,
+          total_pages: 0,
+          current_page: 1,
+          has_next: false,
+          has_previous: false
+        };
+      }
+    },
+    
+    // Create a new forum topic
+    createTopic: async (data: {
+      title: string;
+      content: string;
+      category_id: number;
+    }): Promise<ForumTopicDetail | null> => {
+      try {
+        const response = await api.post('/api/forum/topics/create/', data);
+        return response.data as ForumTopicDetail;
+      } catch (error) {
+        console.error('Error creating forum topic:', error);
+        throw error;
+      }
+    },
+    
+    // Update a forum topic
+    updateTopic: async (topicId: number, data: {
+      title?: string;
+      content?: string;
+      category_id?: number;
+      is_pinned?: boolean;
+      is_closed?: boolean;
+    }): Promise<ForumTopicDetail | null> => {
+      try {
+        const response = await api.put(`/api/forum/topics/${topicId}/update/`, data);
+        return response.data as ForumTopicDetail;
+      } catch (error) {
+        console.error('Error updating forum topic:', error);
+        throw error;
+      }
+    },
+    
+    // Delete a forum topic
+    deleteTopic: async (topicId: number): Promise<void> => {
+      try {
+        await api.delete(`/api/forum/topics/${topicId}/delete/`);
+      } catch (error) {
+        console.error('Error deleting forum topic:', error);
+        throw error;
+      }
+    },
+    
+    // Create a new forum reply
+    createReply: async (topicId: number, content: string): Promise<any> => {
+      try {
+        const response = await api.post(`/api/forum/topics/${topicId}/replies/create/`, { content });
+        return response.data;
+      } catch (error) {
+        console.error('Error creating forum reply:', error);
+        throw error;
+      }
+    },
+    
+    // Update a forum reply
+    updateReply: async (topicId: number, replyId: number, data: {
+      content?: string;
+      is_solution?: boolean;
+    }): Promise<any> => {
+      try {
+        const response = await api.put(`/api/forum/topics/${topicId}/replies/${replyId}/update/`, data);
+        return response.data;
+      } catch (error) {
+        console.error('Error updating forum reply:', error);
+        throw error;
+      }
+    },
+    
+    // Delete a forum reply
+    deleteReply: async (topicId: number, replyId: number): Promise<void> => {
+      try {
+        await api.delete(`/api/forum/topics/${topicId}/replies/${replyId}/delete/`);
+      } catch (error) {
+        console.error('Error deleting forum reply:', error);
+        throw error;
       }
     },
     
@@ -185,6 +308,85 @@ export interface ForumTopic {
       } catch (error) {
         console.error('Error fetching forum categories:', error);
         return [];
+      }
+    },
+    
+    // Create a new forum category
+    createCategory: async (data: {
+      name: string;
+      description: string;
+      icon?: string;
+      order?: number;
+    }): Promise<ForumCategory | null> => {
+      try {
+        const response = await api.post('/api/forum/categories/create/', data);
+        return response.data as ForumCategory;
+      } catch (error) {
+        console.error('Error creating forum category:', error);
+        throw error;
+      }
+    },
+    
+    // Update a forum category
+    updateCategory: async (categoryId: number, data: {
+      name?: string;
+      description?: string;
+      icon?: string;
+      order?: number;
+    }): Promise<ForumCategory | null> => {
+      try {
+        const response = await api.put(`/api/forum/categories/${categoryId}/update/`, data);
+        return response.data as ForumCategory;
+      } catch (error) {
+        console.error('Error updating forum category:', error);
+        throw error;
+      }
+    },
+    
+    // Delete a forum category
+    deleteCategory: async (categoryId: number): Promise<void> => {
+      try {
+        await api.delete(`/api/forum/categories/${categoryId}/delete/`);
+      } catch (error) {
+        console.error('Error deleting forum category:', error);
+        throw error;
+      }
+    },
+    
+    // Get forum statistics
+    getStats: async (): Promise<{
+      stats: {
+        total_topics: number;
+        total_replies: number;
+        total_categories: number;
+        total_posts: number;
+      };
+      recent_activity: {
+        topics: ForumTopic[];
+        replies: any[];
+      };
+      active_categories: any[];
+      popular_topics: ForumTopic[];
+    } | null> => {
+      try {
+        const response = await api.get('/api/forum/stats/');
+        return response.data as {
+          stats: {
+            total_topics: number;
+            total_replies: number;
+            total_categories: number;
+            total_posts: number;
+          };
+          recent_activity: {
+            topics: ForumTopic[];
+            replies: any[];
+          };
+          active_categories: any[];
+          popular_topics: ForumTopic[];
+        };
+      } catch (error) {
+        console.error('Error fetching forum stats:', error);
+        return null;
       }
     },
     
