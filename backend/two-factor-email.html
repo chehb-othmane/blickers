@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Two-Factor Authentication Code - Blickers</title>
+    <style>
+        /* Reset and base styles */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f8f9fa;
+        }
+
+        /* Container styles */
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        /* Email card styles */
+        .email-card {
+            background-color: #fff;
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+            overflow: hidden;
+        }
+
+        /* Header styles */
+        .email-header {
+            background-color: #f1f3f5;
+            padding: 10px;
+            border-bottom: 1px solid #dee2e6;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .window-controls {
+            display: flex;
+            align-items: center;
+        }
+
+        .window-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .dot-orange { background-color: #fd7e14; }
+        .dot-green { background-color: #99c805; }
+        .dot-blue { background-color: #9b9bff; }
+
+        .email-label {
+            font-size: 14px;
+            color: #6c757d;
+        }
+
+        /* Email content styles */
+        .email-content {
+            padding: 20px;
+        }
+
+        .email-meta {
+            margin-bottom: 16px;
+        }
+
+        .email-meta p {
+            font-size: 14px;
+            color: #6c757d;
+            margin-bottom: 4px;
+        }
+
+        .email-body {
+            border-top: 1px solid #dee2e6;
+            padding-top: 16px;
+        }
+
+        .brand-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .brand-name {
+            font-weight: bold;
+            font-size: 24px;
+            margin-right: 8px;
+        }
+
+        .brand-subtitle {
+            font-size: 14px;
+            color: #6c757d;
+        }
+
+        .email-text {
+            color: #495057;
+            margin-bottom: 16px;
+        }
+
+        .verification-code {
+            display: inline-block;
+            background: linear-gradient(to right, #9b9bff, #6262cf);
+            color: white;
+            padding: 12px 24px;
+            text-decoration: none;
+            border-radius: 4px;
+            font-weight: 500;
+            margin: 24px 0;
+            font-size: 24px;
+            letter-spacing: 4px;
+        }
+
+        .email-footer {
+            border-top: 1px solid #dee2e6;
+            padding-top: 16px;
+            margin-top: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #6c757d;
+        }
+
+        /* Responsive styles */
+        @media (max-width: 640px) {
+            .container {
+                padding: 10px;
+            }
+
+            .email-content {
+                padding: 15px;
+            }
+
+            .brand-name {
+                font-size: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="email-card">
+            <div class="email-header">
+                <div class="window-controls">
+                    <div class="window-dot dot-orange"></div>
+                    <div class="window-dot dot-green"></div>
+                    <div class="window-dot dot-blue"></div>
+                </div>
+                <div class="email-label">Email</div>
+            </div>
+
+            <div class="email-content">
+                <div class="email-meta">
+                    <p>From: Blickers Support &lt;support@blickers.edu&gt;</p>
+                    <p>To: user@example.com</p>
+                    <p>Subject: Your Two-Factor Authentication Code</p>
+                </div>
+
+                <div class="email-body">
+                    <div class="brand-header">
+                        <div class="brand-name">Blickers</div>
+                        <div class="brand-subtitle">Student Union Platform</div>
+                    </div>
+
+                    <p class="email-text">Hello,</p>
+                    <p class="email-text">
+                        You are setting up two-factor authentication for your Blickers account. Use the following code to verify your email:
+                    </p>
+
+                    <div style="text-align: center;">
+                        <div class="verification-code">123456</div>
+                    </div>
+
+                    <p class="email-text">
+                        This code will expire in 10 minutes. If you didn't request this code, please ignore this email and ensure your account is secure.
+                    </p>
+
+                    <p class="email-text">
+                        If you have any questions, please contact our support team at support@blickers.edu.
+                    </p>
+
+                    <p class="email-text">
+                        Best regards,<br />
+                        The Blickers Team
+                    </p>
+
+                    <div class="email-footer">
+                        <p>This is an automated message, please do not reply to this email.</p>
+                        <p>© 2025 Blickers Student Union. All rights reserved.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html> 
