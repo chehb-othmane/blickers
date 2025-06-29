@@ -1,11 +1,22 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status
-from rest_framework.permissions import IsAuthenticated, AllowAny
-from .models import Event, EventRegistration, ForumTopic, ForumCategory, Report, Message, Post, PostComment, Reaction, ForumReply, Notification, TwoFactorAuth, RecoveryCode, EventType
-from .serializers import EventSerializer, ForumTopicListSerializer, PostSerializer
+from rest_framework import status, generics
+from rest_framework.permissions import IsAuthenticated, AllowAny, IsAuthenticatedOrReadOnly
+from .models import (
+    Event, EventRegistration, ForumTopic, ForumCategory, Report, Message,
+    Post, PostComment, Reaction, ForumReply, Notification, TwoFactorAuth,
+    RecoveryCode, EventType
+)
+from .serializers import (
+    EventSerializer, PostSerializer, # ForumTopicListSerializer removed, replaced by ForumTopicSerializer
+    UserRegistrationSerializer, UserSerializer, ForumCategorySerializer,
+    ForumReplySerializer, ForumTopicSerializer, ForumTopicDetailSerializer,
+    ForumTopicCreateUpdateSerializer, ReportSerializer
+)
 from django.utils import timezone
 from django.contrib.auth import get_user_model, authenticate
+from .permissions import IsOwnerOrModeratorOrReadOnly, IsModeratorOrAdmin, IsTopicOwnerOrModerator
+from rest_framework.exceptions import PermissionDenied
 from django.db import transaction
 from .models import User
 from .serializers import UserRegistrationSerializer, UserSerializer
@@ -137,8 +148,171 @@ class ForumTopicListView(APIView):
             is_closed=False
         ).order_by('-is_pinned', '-updated_at')[:3]  # Limit to 3 topics for the preview
         
-        serializer = ForumTopicListSerializer(topics, many=True)
+        serializer = ForumTopicSerializer(topics, many=True, context={'request': request}) # Use ForumTopicSerializer
         return Response(serializer.data)
+
+class ForumCategoryListView(generics.ListAPIView): # Changed to ListAPIView
+    queryset = ForumCategory.objects.all().order_by('order')
+    serializer_class = ForumCategorySerializer
+    permission_classes = [AllowAny]
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        # Manual serialization to include counts, can be moved to serializer if preferred
+        data = [{
+            'id': category.id,
+            'name': category.name,
+            'description': category.description,
+            'icon': category.icon,
+            'topics_count': category.topics.count(), # Renamed for clarity
+            # 'posts_count' was ambiguous, replies_count within topics is more relevant for forum
+            'total_posts_count': sum(topic.replies.count() + 1 for topic in category.topics.all())
+        } for category in queryset]
+        return Response(data)
+
+# Placeholder for custom permission, will be created in permissions.py
+class IsOwnerOrModeratorOrReadOnly(IsAuthenticatedOrReadOnly):
+    def has_object_permission(self, request, view, obj):
+        if request.method in ['GET', 'HEAD', 'OPTIONS']:
+            return True
+
+        # Instance must have an attribute named `created_by`.
+        is_owner = obj.created_by == request.user
+
+        is_moderator = False
+        if hasattr(request.user, 'role') and request.user.role in ['ADMIN', 'BDE']:
+            is_moderator = True
+
+        return is_owner or is_moderator
+
+class ForumTopicListCreateAPIView(generics.ListCreateAPIView):
+    queryset = ForumTopic.objects.all().order_by('-is_pinned', '-updated_at')
+    permission_classes = [IsAuthenticatedOrReadOnly]
+    # pagination_class = StandardResultsSetPagination # Add if pagination is set up
+
+    def get_serializer_class(self):
+        if self.request.method == 'POST':
+            return ForumTopicCreateUpdateSerializer
+        return ForumTopicSerializer
+
+    def perform_create(self, serializer):
+        if not self.request.user.is_authenticated:
+            raise PermissionDenied("You must be logged in to create a topic.")
+        serializer.save(created_by=self.request.user)
+
+class ForumTopicRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = ForumTopic.objects.all()
+    permission_classes = [IsOwnerOrModeratorOrReadOnly]
+
+    def get_serializer_class(self):
+        if self.request.method in ['PUT', 'PATCH']:
+            return ForumTopicCreateUpdateSerializer
+        return ForumTopicDetailSerializer
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        instance.views_count += 1
+        instance.save(update_fields=['views_count'])
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
+class ForumReplyListCreateAPIView(generics.ListCreateAPIView):
+    serializer_class = ForumReplySerializer
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
+    def get_queryset(self):
+        topic_pk = self.kwargs.get('topic_pk')
+        return ForumReply.objects.filter(topic_id=topic_pk).order_by('created_at')
+
+    def perform_create(self, serializer):
+        if not self.request.user.is_authenticated:
+            raise PermissionDenied("You must be logged in to reply.")
+        topic_pk = self.kwargs.get('topic_pk')
+        topic = generics.get_object_or_404(ForumTopic, pk=topic_pk)
+        if topic.is_closed:
+            raise PermissionDenied("This topic is closed and does not accept new replies.")
+        serializer.save(created_by=self.request.user, topic=topic)
+
+class ForumReplyRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = ForumReply.objects.all()
+    serializer_class = ForumReplySerializer
+    permission_classes = [IsOwnerOrModeratorOrReadOnly]
+
+# --- Simplified Vote Views ---
+class ForumTopicUpvoteAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        topic = generics.get_object_or_404(ForumTopic, pk=pk)
+        # Basic increment, no double vote prevention yet
+        topic.upvotes += 1
+        topic.save(update_fields=['upvotes'])
+        return Response({'upvotes': topic.upvotes, 'message': 'Topic upvoted'}, status=status.HTTP_200_OK)
+
+class ForumReplyUpvoteAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        reply = generics.get_object_or_404(ForumReply, pk=pk)
+        reply.upvotes += 1
+        reply.save(update_fields=['upvotes'])
+        return Response({'upvotes': reply.upvotes, 'message': 'Reply upvoted'}, status=status.HTTP_200_OK)
+
+# --- Moderation Views ---
+class ForumTopicTogglePinAPIView(APIView):
+    permission_classes = [IsModeratorOrAdmin]
+
+    def post(self, request, pk):
+        # Permission already checked by IsModeratorOrAdmin
+        topic = generics.get_object_or_404(ForumTopic, pk=pk)
+        topic.is_pinned = not topic.is_pinned
+        topic.save(update_fields=['is_pinned'])
+        return Response({'is_pinned': topic.is_pinned, 'message': f"Topic {'pinned' if topic.is_pinned else 'unpinned'}"}, status=status.HTTP_200_OK)
+
+class ForumTopicToggleCloseAPIView(APIView):
+    permission_classes = [IsModeratorOrAdmin]
+
+    def post(self, request, pk):
+        # Permission already checked by IsModeratorOrAdmin
+        topic = generics.get_object_or_404(ForumTopic, pk=pk)
+        topic.is_closed = not topic.is_closed
+        topic.save(update_fields=['is_closed'])
+        return Response({'is_closed': topic.is_closed, 'message': f"Topic {'closed' if topic.is_closed else 'opened'}"}, status=status.HTTP_200_OK)
+
+class ForumReplyMarkSolutionAPIView(APIView):
+    permission_classes = [IsTopicOwnerOrModerator]
+
+    def post(self, request, pk):
+        reply = generics.get_object_or_404(ForumReply, pk=pk)
+        # Permission already checked by IsTopicOwnerOrModerator for the reply object
+
+        # Optional: Unmark other solutions for the same topic
+        # ForumReply.objects.filter(topic=topic, is_solution=True).exclude(pk=pk).update(is_solution=False)
+
+        reply.is_solution = not reply.is_solution
+        reply.save(update_fields=['is_solution'])
+        return Response({'is_solution': reply.is_solution, 'message': f"Reply marked as {'solution' if reply.is_solution else 'not a solution'}"}, status=status.HTTP_200_OK)
+
+class ReportCreateAPIView(generics.CreateAPIView):
+    queryset = Report.objects.all()
+    serializer_class = ReportSerializer
+    permission_classes = [IsAuthenticated]
+
+    def perform_create(self, serializer):
+        serializer.save(reporter=self.request.user)
+
+class ForumStatsAPIView(APIView):
+    permission_classes = [AllowAny] # Or IsAuthenticated depending on requirements
+
+    def get(self, request):
+        total_threads = ForumTopic.objects.count()
+        total_replies = ForumReply.objects.count()
+        # More stats can be added here (e.g., active users today, etc.)
+        return Response({
+            'total_threads': total_threads,
+            'total_replies': total_replies,
+        }, status=status.HTTP_200_OK)
+
 
 class ForumCategoryListView(APIView):
     """API endpoint to retrieve all forum categories"""

@@ -192,6 +192,8 @@ class ForumTopic(models.Model):
     is_pinned = models.BooleanField(default=False)  # Épinglé en haut du forum
     is_closed = models.BooleanField(default=False)  # Fermé aux nouvelles réponses
     views_count = models.PositiveIntegerField(default=0)
+    tags = models.CharField(max_length=255, blank=True, default="", help_text="Comma-separated tags")
+    upvotes = models.IntegerField(default=0)
     
     class Meta:
         ordering = ['-is_pinned', '-created_at']
@@ -216,6 +218,7 @@ class ForumReply(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     is_solution = models.BooleanField(default=False)  # Marque une réponse comme solution
+    upvotes = models.IntegerField(default=0)
     
     class Meta:
         verbose_name_plural = "Forum replies"

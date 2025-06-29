@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from .models import ChatRoom, Message, User, Post, Reaction
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
-from .models import Event, ForumTopic
+from .models import Event, ForumTopic, ForumCategory, ForumReply, Report # Added ForumCategory, ForumReply, Report
 
 User = get_user_model()
 
@@ -224,6 +224,109 @@ class ForumTopicListSerializer(serializers.ModelSerializer):
     def get_preview(self, obj):
         # Return the first 150 characters of the content as a preview
         return obj.content[:150] + "..." if len(obj.content) > 150 else obj.content
+
+# --- Enhanced User Serializer (already good for author details) ---
+# class UserSerializer(serializers.ModelSerializer):
+#     profile_picture_url = serializers.ImageField(source='profile_picture', read_only=True)
+#     class Meta:
+#         model = User
+#         fields = ['id', 'username', 'first_name', 'last_name', 'profile_picture_url'] # Simplified for author context
+#         read_only_fields = fields
+
+
+# --- ForumCategory Serializer ---
+class ForumCategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ForumCategory
+        fields = ['id', 'name', 'description', 'icon', 'order']
+
+
+# --- ForumReply Serializer ---
+class ForumReplySerializer(serializers.ModelSerializer):
+    created_by = UserSerializer(read_only=True)
+    # If we decide to show who upvoted, a ManyRelatedField or similar could be used for upvoted_by_users
+
+    class Meta:
+        model = ForumReply
+        fields = ['id', 'topic', 'content', 'created_by', 'created_at', 'updated_at', 'upvotes', 'is_solution']
+        read_only_fields = ['created_by', 'created_at', 'updated_at', 'upvotes', 'topic'] # topic is set by view
+
+    def create(self, validated_data):
+        # created_by will be set in the view (perform_create)
+        # topic will also be set in the view based on URL
+        return ForumReply.objects.create(**validated_data)
+
+
+# --- ForumTopic Serializer (for Listing) ---
+# Renaming ForumTopicListSerializer to ForumTopicSerializer for general list use
+class ForumTopicSerializer(serializers.ModelSerializer):
+    category = ForumCategorySerializer(read_only=True)
+    created_by = UserSerializer(read_only=True)
+    replies_count = serializers.SerializerMethodField()
+    last_activity = serializers.SerializerMethodField()
+    # tags field will be handled directly as it's a CharField in the model
+
+    class Meta:
+        model = ForumTopic
+        fields = [
+            'id', 'title', 'category', 'created_by', 'created_at', 'updated_at',
+            'is_pinned', 'is_closed', 'views_count', 'replies_count',
+            'last_activity', 'tags', 'upvotes', 'content' # content added for list view, can be truncated by frontend if needed
+        ]
+        read_only_fields = ['created_by', 'created_at', 'updated_at', 'views_count', 'upvotes', 'is_pinned', 'is_closed']
+
+    def get_replies_count(self, obj):
+        return obj.replies.count() # Uses related_name 'replies' from ForumReply model
+
+    def get_last_activity(self, obj):
+        last_reply = obj.replies.order_by('-created_at').first()
+        last_activity_timestamp = last_reply.created_at if last_reply else obj.created_at
+
+        # Using a simple string representation for now, frontend can format it better
+        return last_activity_timestamp.isoformat()
+
+
+# --- ForumTopicDetail Serializer (for Single Topic View) ---
+class ForumTopicDetailSerializer(ForumTopicSerializer): # Inherits from ForumTopicSerializer
+    replies = ForumReplySerializer(many=True, read_only=True) # Nested replies
+
+    class Meta(ForumTopicSerializer.Meta): # Inherit Meta from parent
+        fields = ForumTopicSerializer.Meta.fields + ['content', 'replies'] # Add full content and replies
+        # No need to re-declare read_only_fields if they are same or subset
+
+
+# --- ForumTopicCreateUpdate Serializer ---
+class ForumTopicCreateUpdateSerializer(serializers.ModelSerializer):
+    category = serializers.PrimaryKeyRelatedField(queryset=ForumCategory.objects.all())
+    # tags are received as a comma-separated string and stored directly
+
+    class Meta:
+        model = ForumTopic
+        fields = ['title', 'content', 'category', 'tags']
+        # created_by, is_pinned, is_closed, upvotes, views_count are handled by the backend/moderation logic
+
+    def create(self, validated_data):
+        # created_by will be set in the view
+        return ForumTopic.objects.create(**validated_data)
+
+    def update(self, instance, validated_data):
+        instance.title = validated_data.get('title', instance.title)
+        instance.content = validated_data.get('content', instance.content)
+        instance.category = validated_data.get('category', instance.category)
+        instance.tags = validated_data.get('tags', instance.tags)
+        instance.save()
+        return instance
+
+
+# --- Report Serializer ---
+class ReportSerializer(serializers.ModelSerializer):
+    # reporter will be set in the view using request.user
+
+    class Meta:
+        model = Report
+        fields = ['id', 'reporter', 'content_type', 'content_id', 'reason', 'created_at', 'status']
+        read_only_fields = ['id', 'reporter', 'created_at', 'status'] # Status managed by backend logic
+
 
 class PostSerializer(serializers.ModelSerializer):
     author = serializers.SerializerMethodField()
