@@ -145,9 +145,9 @@ class ForumCategoryAdmin(admin.ModelAdmin):
 
 @admin.register(ForumTopic)
 class ForumTopicAdmin(admin.ModelAdmin):
-    list_display = ('title', 'category', 'created_by', 'created_at', 'views_count', 'replies_count', 'is_pinned', 'is_closed')
+    list_display = ('title', 'category', 'created_by', 'created_at', 'views_count', 'replies_count', 'upvotes', 'tags', 'is_pinned', 'is_closed')
     list_filter = ('category', 'is_pinned', 'is_closed', 'created_at')
-    search_fields = ('title', 'content', 'created_by__username')
+    search_fields = ('title', 'content', 'created_by__username', 'tags')
     date_hierarchy = 'created_at'
     inlines = [ForumReplyInline]
     actions = ['close_topics', 'pin_topics', 'unpin_topics']
@@ -168,13 +168,29 @@ class ForumTopicAdmin(admin.ModelAdmin):
         queryset.update(is_pinned=False)
     unpin_topics.short_description = "Désépingler les sujets sélectionnés"
 
+    fieldsets = (
+        (None, {
+            'fields': ('title', 'content', 'category', 'created_by', 'tags')
+        }),
+        ('Status & Stats', {
+            'fields': ('is_pinned', 'is_closed', 'upvotes', 'views_count')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    readonly_fields = ('created_at', 'updated_at', 'views_count')
+
 
 @admin.register(ForumReply)
 class ForumReplyAdmin(admin.ModelAdmin):
-    list_display = ('truncated_content', 'topic_link', 'created_by', 'created_at', 'is_solution')
-    list_filter = ('is_solution', 'created_at')
+    list_display = ('truncated_content', 'topic_link', 'created_by', 'created_at', 'upvotes', 'is_solution')
+    list_filter = ('is_solution', 'created_at', 'topic__category')
     search_fields = ('content', 'created_by__username', 'topic__title')
     date_hierarchy = 'created_at'
+    fields = ('topic', 'created_by', 'content', 'upvotes', 'is_solution', 'created_at', 'updated_at')
+    readonly_fields = ('created_at', 'updated_at')
     
     def truncated_content(self, obj):
         return (obj.content[:75] + '...') if len(obj.content) > 75 else obj.content
